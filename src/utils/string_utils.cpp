@@ -113,14 +113,18 @@ char *lowcase(char *str)
 
 void upcase(std::string &str)
 {
-	int (*tf)(int) = std::toupper;
-	std::transform(str.begin(), str.end(), str.begin(), tf);
+	auto to_upper = [](const int character) {
+		return std::toupper(character);
+	};
+	std::transform(str.begin(), str.end(), str.begin(), to_upper);
 }
 
 void lowcase(std::string &str)
 {
-	int (*tf)(int) = std::tolower;
-	std::transform(str.begin(), str.end(), str.begin(), tf);
+	auto to_lower = [](const int character) {
+		return std::tolower(character);
+	};
+	std::transform(str.begin(), str.end(), str.begin(), to_lower);
 }
 
 std::string replace(const std::string &str, char old_char, char new_char) noexcept
@@ -321,10 +325,7 @@ std::string strip_word(std::string& line)
 
 void strip_punctuation(std::string &str)
 {
-	str.erase(std::remove_if(str.begin(),
-	                         str.end(),
-	                         [](unsigned char c) { return std::ispunct(c); }),
-	          str.end());
+	std::erase_if(str, [](unsigned char c) { return std::ispunct(c); });
 }
 
 std::string strip_prefix(const std::string_view str, const std::string_view prefix) noexcept
