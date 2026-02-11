@@ -20,12 +20,12 @@
 #include "hardware/memory.h"
 #include "hardware/port.h"
 #include "ints/bios.h"
+#include "ints/ems.h"
 #include "misc/support.h"
 
 #define EMM_PAGEFRAME	0xE000
 #define EMM_PAGEFRAME4K	((EMM_PAGEFRAME*16)/4096)
 #define	EMM_MAX_HANDLES	200				/* 255 Max */
-#define EMM_PAGE_SIZE	(16*1024U)
 #define EMM_MAX_PAGES	(32 * 1024 / 16 )
 #define EMM_MAX_PHYS	4				/* 4 16kb pages in pageframe */
 
@@ -66,6 +66,10 @@
 #define EMM_MOVE_OVLAPI			0x97
 #define EMM_NOT_FOUND			0xa0
 
+const std::string EmsDeviceName = "EMMXXXX0";
+
+// Maximum number fo free pages we are allowed to report
+constexpr size_t MaxPages = 0x7fffu;
 
 struct EMM_Mapping {
 	uint16_t handle;
@@ -86,6 +90,15 @@ static EMM_Handle emm_handles[EMM_MAX_HANDLES];
 static EMM_Mapping emm_mappings[EMM_MAX_PHYS];
 static EMM_Mapping emm_segmentmappings[0x40];
 
+static uint16_t get_total_pages()
+{
+	return std::min(MaxPages, static_cast<size_t>(MEM_TotalPages() / EMM_MAX_PHYS));
+}
+
+static uint16_t get_free_pages()
+{
+	return std::min(MaxPages, static_cast<size_t>(MEM_FreeTotal() / EMM_MAX_PHYS));
+}
 
 static uint16_t GEMMIS_seg;
 
@@ -93,7 +106,7 @@ class device_EMM final : public DOS_Device {
 public:
 	device_EMM(bool is_emm386_avail) : is_emm386(is_emm386_avail)
 	{
-		SetName("EMMXXXX0");
+		SetName(EmsDeviceName.c_str());
 		GEMMIS_seg = 0;
 	}
 
@@ -210,10 +223,14 @@ bool device_EMM::ReadFromControlChannel(PhysPt bufptr,uint16_t size,uint16_t * r
 			if (!is_emm386) return false;
 			if (EMM_MINOR_VERSION < 0x2d) return false;
 			if (size!=4) return false;
-			mem_writew(bufptr+0x00,(uint16_t)(MEM_TotalPages()*4));	// max size (kb)
-			mem_writew(bufptr+0x02,0x80);							// min size (kb)
-			*retcode=2;
-			return true;
+		        // max size (kb)
+		        mem_writew(bufptr + 0x00,
+		                   std::min(static_cast<uint32_t>(UINT16_MAX),
+		                            MEM_TotalPages() * 4));
+		        // min size (kb)
+		        mem_writew(bufptr + 0x02, 0x80);
+		        *retcode = 2;
+		        return true;
 	}
 	return false;
 }
@@ -238,12 +255,6 @@ struct MoveRegion {
 	uint16_t dest_page_seg;
 };
 
-static uint16_t EMM_GetFreePages(void) {
-	Bitu count=MEM_FreeTotal()/4;
-	if (count>0x7fff) count=0x7fff;
-	return (uint16_t)count;
-}
-
 static bool inline ValidHandle(uint16_t handle) {
 	if (handle>=EMM_MAX_HANDLES) return false;
 	if (emm_handles[handle].pages==NULL_HANDLE) return false;
@@ -256,7 +267,9 @@ static uint8_t EMM_AllocateMemory(uint16_t pages,uint16_t & dhandle,bool can_all
 		if (!can_allocate_zpages) return EMM_ZERO_PAGES;
 	}
 	/* Check for enough free pages */
-	if ((MEM_FreeTotal()/ 4) < pages) { return EMM_OUT_OF_LOG;}
+	if (get_free_pages() < pages) {
+		return EMM_OUT_OF_LOG;
+	}
 	uint16_t handle = 1;
 	/* Check for a free handle */
 	while (emm_handles[handle].pages != NULL_HANDLE) {
@@ -276,7 +289,9 @@ static uint8_t EMM_AllocateMemory(uint16_t pages,uint16_t & dhandle,bool can_all
 
 static uint8_t EMM_AllocateSystemHandle(uint16_t pages) {
 	/* Check for enough free pages */
-	if ((MEM_FreeTotal()/ 4) < pages) { return EMM_OUT_OF_LOG;}
+	if (get_free_pages() < pages) {
+		return EMM_OUT_OF_LOG;
+	}
 	uint16_t handle = EMM_SYSTEM_HANDLE;	// emm system handle (reserved for OS usage)
 	/* Release memory if already allocated */
 	if (emm_handles[handle].pages != NULL_HANDLE) {
@@ -675,7 +690,7 @@ static uint8_t MemoryRegion()
 		src_mem=region.src_page_seg*16+region.src_offset;
 	} else {
 		if (!ValidHandle(region.src_handle)) return EMM_INVALID_HANDLE;
-		if ((emm_handles[region.src_handle].pages*EMM_PAGE_SIZE) < ((region.src_page_seg*EMM_PAGE_SIZE)+region.src_offset+region.bytes)) return EMM_LOG_OUT_RANGE;
+		if ((emm_handles[region.src_handle].pages*EmsPageSize) < ((region.src_page_seg*EmsPageSize)+region.src_offset+region.bytes)) return EMM_LOG_OUT_RANGE;
 		src_handle=emm_handles[region.src_handle].mem;
 		Bitu pages=region.src_page_seg*4+(region.src_offset/MEM_PAGE_SIZE);
 		for (;pages>0;pages--) src_handle=MEM_NextHandle(src_handle);
@@ -686,7 +701,7 @@ static uint8_t MemoryRegion()
 		dest_mem=region.dest_page_seg*16+region.dest_offset;
 	} else {
 		if (!ValidHandle(region.dest_handle)) return EMM_INVALID_HANDLE;
-		if (emm_handles[region.dest_handle].pages*EMM_PAGE_SIZE < (region.dest_page_seg*EMM_PAGE_SIZE)+region.dest_offset+region.bytes) return EMM_LOG_OUT_RANGE;
+		if (emm_handles[region.dest_handle].pages*EmsPageSize < (region.dest_page_seg*EmsPageSize)+region.dest_offset+region.bytes) return EMM_LOG_OUT_RANGE;
 		dest_handle=emm_handles[region.dest_handle].mem;
 		Bitu pages=region.dest_page_seg*4+(region.dest_offset/MEM_PAGE_SIZE);
 		for (;pages>0;pages--) dest_handle=MEM_NextHandle(dest_handle);
@@ -772,9 +787,9 @@ static Bitu INT67_Handler(void) {
 		reg_ah=EMM_NO_ERROR;
 		break;
 	case 0x42:		/* Get number of pages */
-		reg_dx=(uint16_t)(MEM_TotalPages()/4);		//Not entirely correct but okay
-		reg_bx=EMM_GetFreePages();
-		reg_ah=EMM_NO_ERROR;
+		reg_dx = get_total_pages();
+		reg_bx = get_free_pages();
+		reg_ah = EMM_NO_ERROR;
 		break;
 	case 0x43:		/* Get Handle and Allocate Pages */
 		reg_ah=EMM_AllocateMemory(reg_bx,reg_dx,false);
@@ -906,8 +921,8 @@ static Bitu INT67_Handler(void) {
 			}
 			break;
 		case 0x01:	// get unallocated raw page count
-			reg_dx=(uint16_t)(MEM_TotalPages()/4);		//Not entirely correct but okay
-			reg_bx=EMM_GetFreePages();
+			reg_dx = get_total_pages();
+			reg_bx = get_free_pages();
 			break;
 		default:
 			LOG(LOG_MISC,LOG_ERROR)("EMS:Call 59 subfct %2X not supported",reg_al);
@@ -1434,9 +1449,9 @@ public:
 		ems_baseseg = DOS_GetMemory(2); // We have 32 bytes
 
 		/* Add a little hack so it appears that there is an actual ems device installed */
-		const char* emsname = "EMMXXXX0";
-		MEM_BlockWrite(PhysicalMake(ems_baseseg, 0xa), emsname,
-		               strlen(emsname) + 1);
+		MEM_BlockWrite(PhysicalMake(ems_baseseg, 0xa),
+		               EmsDeviceName.c_str(),
+		               EmsDeviceName.length() + 1);
 
 		call_int67=CALLBACK_Allocate();
 		CALLBACK_Setup(call_int67,&INT67_Handler,CB_IRET,PhysicalMake(ems_baseseg,4),"Int 67 ems");
