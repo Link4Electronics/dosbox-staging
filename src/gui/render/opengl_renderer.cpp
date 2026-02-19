@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText:  2025-2025 The DOSBox Staging Team
+// SPDX-FileCopyrightText:  2025-2026 The DOSBox Staging Team
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "opengl_renderer.h"
@@ -165,7 +165,7 @@ bool OpenGlRenderer::InitRenderer()
 
 	glGenBuffers(1, &vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_data), vertex_data, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_data), vertex_data.data(), GL_STATIC_DRAW);
 
 	glVertexAttribPointer(0,        // attribute index,
 	                      2,        // num components (vec2),
